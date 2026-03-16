@@ -1,0 +1,96 @@
+import html
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+import re
+
+# ==========================================
+# CONFIGURATION
+# ==========================================
+INPUT_FILE = "wordpress.xml" 
+OUTPUT_FILE = "final_blogger_import.xml"
+
+def clean_content(text):
+    if not text: return ""
+    decoded = html.unescape(text)
+    # Strip all WP block comments
+    clean = re.sub(r'', '', decoded)
+    return clean.strip()
+
+def convert_wxr_to_blogger():
+    # Use the new timezone-aware UTC method to fix the DeprecationWarning
+    now_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    ET.register_namespace('', "http://www.w3.org/2005/Atom")
+    feed = ET.Element("feed", xmlns="http://www.w3.org/2005/Atom")
+    
+    ET.SubElement(feed, "title").text = "Imported Blog"
+    ET.SubElement(feed, "updated").text = now_utc
+
+    try:
+        tree = ET.parse(INPUT_FILE)
+        root = tree.getroot()
+
+        # Find all namespaces in the file automatically to avoid mismatches
+        # This helps if your file uses ns0, ns1, etc.
+        ns_map = {k: v for k, v in re.findall(r'xmlns:(\w+)="([^"]+)"', open(INPUT_FILE, encoding='utf-8').read())}
+        # Add standard ones if missing
+        ns_map.setdefault('wp', 'http://wordpress.org/export/1.2/')
+        ns_map.setdefault('content', 'http://purl.org/rss/1.0/modules/content/')
+
+        count = 0
+        # search for 'item' anywhere in the file (more robust than channel/item)
+        for item in root.findall(".//item"):
+            post_type_el = item.find("wp:post_type", ns_map)
+            post_status_el = item.find("wp:post_status", ns_map)
+            
+            # Use 'post' as default if tag is missing
+            p_type = post_type_el.text if post_type_el is not None else "post"
+            p_status = post_status_el.text if post_status_el is not None else "publish"
+
+            if p_status == 'publish' and p_type in ['post', 'page']:
+                entry = ET.SubElement(feed, "entry")
+
+                # Category Kind
+                kind = "page" if p_type == "page" else "post"
+                ET.SubElement(entry, "category", 
+                              scheme="http://schemas.google.com/g/2005#kind", 
+                              term=f"http://schemas.google.com/intl/en/type/{kind}")
+
+                # Title
+                title_el = item.find("title")
+                title_text = title_el.text if title_el is not None and title_el.text else "Untitled"
+                ET.SubElement(entry, "title", type="text").text = title_text
+
+                # Content (handles different content tags)
+                content_encoded = item.find("content:encoded", ns_map)
+                raw_body = content_encoded.text if content_encoded is not None else ""
+                ET.SubElement(entry, "content", type="html").text = clean_content(raw_body)
+
+                # Dates
+                date_el = item.find("wp:post_date_gmt", ns_map)
+                if date_el is not None and date_el.text and date_el.text != '0000-00-00 00:00:00':
+                    iso_date = date_el.text.replace(" ", "T") + "Z"
+                else:
+                    iso_date = now_utc
+                
+                ET.SubElement(entry, "published").text = iso_date
+                ET.SubElement(entry, "updated").text = iso_date
+
+                # Author
+                author = ET.SubElement(entry, "author")
+                ET.SubElement(author, "name").text = "Sajid Ansari"
+
+                count += 1
+
+        output_tree = ET.ElementTree(feed)
+        output_tree.write(OUTPUT_FILE, encoding="utf-8", xml_declaration=True)
+        
+        print(f"✅ Success! {count} entries converted.")
+        if count == 0:
+            print("⚠️ Warning: Check if your XML tags are named differently (e.g., 'entry' instead of 'item').")
+
+    except Exception as e:
+        print(f"❌ Error: {e}")
+
+if __name__ == "__main__":
+    convert_wxr_to_blogger()

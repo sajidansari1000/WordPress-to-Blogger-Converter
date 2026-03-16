@@ -12,8 +12,10 @@ OUTPUT_FILE = "final_blogger_import.xml"
 def clean_content(text):
     if not text: return ""
     decoded = html.unescape(text)
-    # Strip all WP block comments
+    # This regex removes all and comments
     clean = re.sub(r'', '', decoded)
+    # This removes empty lines left behind by the comments
+    clean = re.sub(r'\n\s*\n', '\n', clean) 
     return clean.strip()
 
 def convert_wxr_to_blogger():
